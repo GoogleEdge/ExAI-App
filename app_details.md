@@ -1,4 +1,4 @@
-# ExAI 易析AI
+# ExAI 文档
 ![Status](https://img.shields.io/badge/status-Planning-important)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-lightgrey)
@@ -80,13 +80,13 @@
    - 结合检索内容，生成包含教材页码参考、具体建议的最终报告。
 ### 5.2 Prompt 策略
 
-采用 **CoT (Chain of Thought)** 提示词策略，强制模型输出 JSON 格式，确保程序能准确解析并执行“联动操作”（如自动创建 TODO）。
+采用 **CoT (Chain of Thought)** 提示词策略（提示词工程），强制模型输出 JSON 格式，确保程序能准确解析并执行“联动操作”（如自动创建 TODO）。
 
 ---
 
 ### 6. 开源协议
 
-本项目采用 **Apache-2.0** 协议。这允许大家在保留版权声明的前提下自由使用和修改，同时也为我们未来的商业化保留了灵活性。
+本项目采用 **Apache-2.0** 协议。这允许所有人在保留版权声明的前提下自由使用和修改。
 
 ---
 ## 📜 License
