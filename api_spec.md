@@ -29,7 +29,9 @@ Authorization: Bearer YOUR_API_KEY
 - Content-Type: `application/json` (普通请求)
 - Content-Type: `multipart/form-data` (文件上传)
 ### 1.4 响应格式
+
 所有接口返回 JSON 格式，统一结构见 [2. 统一响应格式](#2-统一响应格式)。
+
 ---
 ## 2. 统一响应格式
 ### 2.1 成功响应
