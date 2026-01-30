@@ -1,0 +1,370 @@
+# ExAI 后端 API 规范文档
+
+版本：v1.0
+更新日期：2026-01-02  
+
+---
+## 📚 目录
+- [1. 基本信息](#1-基本信息)
+- [2. 统一响应格式](#2-统一响应格式)
+- [3. 核心接口](#3-核心接口)
+- [4. 查询接口](#4-查询接口)
+- [5. 扩展接口](#5-扩展接口)
+- [6. 性能优化指南](#6-性能优化指南)
+- [7. 错误码定义](#7-错误码定义)
+---
+## 1. 基本信息
+### 1.1 Base URL
+```
+开发环境: http://localhost:8000/api/v1
+生产环境: 未配置
+```
+### 1.2 认证方式
+当前版本暂无需认证（使用默认用户 ID）。
+后续版本将支持 API Key 认证：
+```
+Authorization: Bearer YOUR_API_KEY
+```
+### 1.3 请求格式
+- Content-Type: `application/json` (普通请求)
+- Content-Type: `multipart/form-data` (文件上传)
+### 1.4 响应格式
+
+所有接口返回 JSON 格式，统一结构见 [2. 统一响应格式](#2-统一响应格式)。
+
+---
+## 2. 统一响应格式
+### 2.1 成功响应
+```json
+{
+  "code": 200,
+  "msg": "操作成功",
+  "data": {
+    // 具体数据
+  },
+  "timestamp": "2026-01-02T10:30:00Z"
+}
+```
+### 2.2 失败响应
+```json
+{
+  "code": 400,
+  "msg": "参数错误：缺少必填字段 subject",
+  "data": null,
+  "timestamp": "2026-01-02T10:30:00Z"
+}
+```
+### 2.3 分页响应
+```json
+{
+  "code": 200,
+  "msg": "ok",
+  "data": {
+    "total": 100,
+    "page": 1,
+    "page_size": 20,
+    "items": [
+      // 数据项列表
+    ]
+  },
+  "timestamp": "2026-01-02T10:30:00Z"
+}
+```
+---
+## 3. 核心接口
+### 3.1 提交试卷分析
+#### 接口描述
+上传试卷/答题卡图片，进行 AI 分析，返回薄弱点、学习建议等。
+#### 请求信息
+- **URL**: `POST /api/v1/analyzes/exam`
+- **Content-Type**: `multipart/form-data`
+#### 请求参数
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| file | File | 是 | 试卷或答题卡图片，支持 jpg/png，最大 100MB |
+| subject | string | 是 | 科目名称，如 "数学"、"物理" |
+| total_score | number | 是 | 试卷满分，如 100、150 |
+| exam_date | string | 否 | 考试日期，格式 YYYY-MM-DD，默认当天 |
+| user_id | string | 否 | 用户 ID，默认写 "default" |
+#### 请求示例
+```bash
+curl -X POST "http://localhost:8000/api/v1/analyzes/exam" \
+  -F "file=@exam.jpg" \
+  -F "subject=数学" \
+  -F "total_score=100" \
+  -F "exam_date=2026-01-02" \
+  -F "user_id=default"
+```
+#### 响应示例（成功）
+```json
+{
+  "code": 200,
+  "msg": "分析完成",
+  "data": {
+    "analyze_id": "ana_20260102_001",
+    "user_score": 82,
+    "score_rate": 0.82,  //得分率
+    "exam_date": "2026-01-02",
+    "subject": "数学",
+    "total_score": 100,
+    "weak_points": [
+      {
+        "knowledge_id": "kp_math_001",
+        "name": "函数的单调性",
+        "error_count": 3,
+        "weakness_level": 0.9
+      },
+      {
+        "knowledge_id": "kp_math_002",
+        "name": "导数应用",
+        "error_count": 2,
+        "weakness_level": 0.7
+      }
+    ],
+    "suggestions": [
+      {
+        "target_knowledge_id": "kp_math_001",
+        "goal": "掌握单调性判定方法和常见函数的单调区间",
+        "steps": [
+          "复习教材第3章3.2节",
+          "完成课后习题3.2-1到3.2-10",
+          "做5道专项选择题和2道证明题"
+        ],
+        "textbook_refs": ["教材 第3章 3.2节"],
+        "estimated_minutes": 60
+      }
+    ],
+    "chart_data": {
+      "labels": ["2025-12-01", "2025-12-15", "2025-12-25", "2026-01-02"],
+      "scores": [70, 75, 78, 82],
+      "rates": [0.70, 0.75, 0.78, 0.82]
+    },
+    "created_at": "2026-01-02T10:30:00Z"
+  },
+  "timestamp": "2026-01-02T10:30:05Z"
+}
+```
+#### 响应示例（失败）
+```json
+{
+  "code": 400,
+  "msg": "文件格式不支持，请上传 jpg 或 png",
+  "data": null,
+  "timestamp": "2026-01-02T10:30:00Z"
+}
+```
+---
+## 4. 查询接口
+### 4.1 查询历史分析列表
+#### 接口描述
+查询用户的考试分析历史记录。
+#### 请求信息
+- **URL**: `GET /api/v1/analyzes`
+#### 查询参数
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| subject | string | 否 | 科目筛选，不传则查所有科目 |
+| user_id | string | 否 | 用户 ID，默认 "default" |
+| limit | int | 否 | 返回条数，到时候再看 |
+| offset | int | 否 | 偏移量，用于分页，默认 0 |
+#### 请求示例
+```bash
+curl "http://localhost:8000/api/v1/analyzes?subject=数学&limit=10"
+```
+#### 响应示例
+```json
+{
+  "code": 200,
+  "msg": "ok",
+  "data": {
+    "total": 12,
+    "limit": 10,
+    "offset": 0,
+    "items": [
+      {
+        "analyze_id": "ana_20260102_001",
+        "subject": "数学",
+        "exam_date": "2026-01-02",
+        "total_score": 100,
+        "user_score": 82,
+        "score_rate": 0.82,
+        "created_at": "2026-01-02T10:30:00Z"
+      },
+      {
+        "analyze_id": "ana_20251225_001",
+        "subject": "数学",
+        "exam_date": "2025-12-25",
+        "total_score": 100,
+        "user_score": 78,
+        "score_rate": 0.78,
+        "created_at": "2025-12-25T15:20:00Z"
+      }
+    ]
+  },
+  "timestamp": "2026-01-02T10:35:00Z"
+}
+```
+### 4.2 查询单条分析详情
+#### 接口描述
+查询某次分析的完整详细信息。
+#### 请求信息
+- **URL**: `GET /api/v1/analyzes/{analyze_id}`
+#### 路径参数
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| analyze_id | string | 是 | 分析 ID |
+#### 请求示例
+```bash
+curl "http://localhost:8000/api/v1/analyzes/ana_20260102_001"
+```
+#### 响应示例
+响应结构与 [3.1 提交试卷分析](#31-提交试卷分析) 的 `data` 字段一致。
+### 4.3 查询成绩趋势
+#### 接口描述
+查询用户的成绩趋势数据，用于绘制折线图。
+#### 请求信息
+- **URL**: `GET /api/v1/stats/trend`
+#### 查询参数
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| subject | string | 否 | 科目，不传则返回整体趋势 |
+| user_id | string | 否 | 用户 ID，默认 "default" |
+| days | int | 否 | 最近多少天，默认 60 |
+#### 请求示例
+```bash
+curl "http://localhost:8000/api/v1/stats/trend?subject=数学&days=60"
+```
+#### 响应示例
+```json
+{
+  "code": 200,
+  "msg": "ok",
+  "data": {
+    "subject": "数学",
+    "points": [
+      {
+        "date": "2025-12-01",
+        "score": 70,
+        "total": 100,
+        "rate": 0.70
+      },
+      {
+        "date": "2025-12-15",
+        "score": 75,
+        "total": 100,
+        "rate": 0.75
+      },
+      {
+        "date": "2026-01-02",
+        "score": 82,
+        "total": 100,
+        "rate": 0.82
+      }
+    ]
+  },
+  "timestamp": "2026-01-02T10:35:00Z"
+}
+```
+---
+## 5. 扩展接口（暂时不用）
+### 5.1 错题本管理
+#### 5.1.1 添加错题
+- **URL**: `POST /api/v1/errors`
+- **Content-Type**: `application/json`
+请求参数：
+```json
+{
+  "analyze_id": "ana_20260102_001",
+  "question_seq": 5,
+  "user_id": "default"
+}
+```
+#### 5.1.2 查询错题列表
+- **URL**: `GET /api/v1/errors`
+查询参数：`subject`, `status` (0:未复习, 1:待复习, 2:已掌握), `limit`
+#### 5.1.3 更新错题状态
+- **URL**: `PATCH /api/v1/errors/{error_id}`
+请求参数：
+```json
+{
+  "status": 2,
+  "review_count": 1
+}
+```
+### 5.2 RAG 检索
+#### 5.2.1 知识点检索
+- **URL**: `POST /api/v1/rag/search`
+- **Content-Type**: `application/json`
+请求参数：
+```json
+{
+  "query": "函数单调性的常见错误",
+  "top_k": 5
+}
+```
+响应示例：
+```json
+{
+  "code": 200,
+  "msg": "ok",
+  "data": {
+    "results": [
+      {
+        "content": "函数单调性是导数应用的基础...",
+        "source": "教材 第3章 3.2节",
+        "score": 0.92
+      }
+    ]
+  }
+}
+```
+### 5.3 知识库管理（暂时不用）
+#### 5.3.1 上传文档到知识库
+- **URL**: `POST /api/v1/knowledge/documents`
+- **Content-Type**: `multipart/form-data`
+请求参数：
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| file | File | 是 | PDF 文档 |
+| subject | string | 是 | 科目 |
+| doc_type | string | 否 | 文档类型：textbook/note/question |
+#### 5.3.2 查询知识库文档
+- **URL**: `GET /api/v1/knowledge/documents`
+#### 5.3.3 删除文档
+- **URL**: `DELETE /api/v1/knowledge/documents/{doc_id}`
+---
+## 6. 性能优化指南
+### 6.1 文件上传优化
+1. **限制文件大小**
+   - 最大 10MB
+   - 前端压缩图片后再上传
+2. **异步处理**
+   - 使用 FastAPI 的 `BackgroundTasks` 处理耗时操作
+   - 立即返回任务 ID，前端轮询查询结果
+### 6.2 响应缓存
+1. **历史分析缓存**
+   - 使用 Redis 缓存历史分析列表
+   - 缓存时间：5 分钟
+2. **成绩趋势缓存**
+   - 查询结果缓存 10 分钟
+   - 用户提交新分析后清除缓存
+## 7. 错误码定义
+| 错误码 | 说明 | HTTP 状态码 |
+|--------|------|------------|
+| 200 | 成功 | 200 |
+| 400 | 请求参数错误 | 400 |
+| 401 | 未认证 | 401 |
+| 403 | 无权限 | 403 |
+| 404 | 资源不存在 | 404 |
+| 429 | 请求过于频繁 | 429 |
+| 500 | 服务器内部错误 | 500 |
+| 503 | 服务暂时不可用 | 503 |
+| 1001 | 文件格式不支持 | 400 |
+| 1002 | 文件大小超限 | 400 |
+| 1003 | OCR 识别失败 | 500 |
+| 1004 | AI 分析失败 | 500 |
+| 1005 | RAG 检索失败 | 500 |
+| 2001 | 分析记录不存在 | 404 |
+| 2002 | 错题记录不存在 | 404 |
+---
+**文档结束**
