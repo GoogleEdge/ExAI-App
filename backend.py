@@ -5,8 +5,9 @@ import uvicorn
 import random
 import hashlib
 import yaml
-import fastapi_cdn_host
-from typing import Optional
+import os
+import time
+from pathlib import Path
 from pydantic import BaseModel
 
 class RegisterRequest(BaseModel):
@@ -22,7 +23,7 @@ class ChatRequest(BaseModel):
     token: str
 
 def get_db():
-    conn = sqlite3.connect('users.db')
+    conn = sqlite3.connect('users.db', check_same_thread=False)
     try:
         yield conn
     finally:
@@ -58,15 +59,32 @@ def config_init():
         'zhipu_ai': {
             'model': 'glm-4.7-flash',
             'api_key': 'sk-1234567890abcdef1234567890abcdef'
+        },
+        'upload_file_path': {
+            'path': 'uploaded_files'
         }
     }
-    with open('config.yaml', 'w') as yaml_file:
-        yaml.dump(config, yaml_file)
+    
+    if not os.path.exists('config.yaml'):
+        with open('config.yaml', 'w') as yaml_file:
+            yaml.dump(config, yaml_file)
+            print("配置文件创建成功！")
+    
+    upload_dir = config['upload_file_path']['path']
+    if not os.path.exists(upload_dir):
+        os.makedirs(upload_dir, exist_ok=True)
+        print(f"创建上传目录: {upload_dir}")
 
 def read_config():
     with open('config.yaml', 'r') as yaml_file:
         config = yaml.safe_load(yaml_file)
+        print("配置文件读取成功！")
     return config
+
+def verify_token(token: str, conn: sqlite3.Connection) -> bool:
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM users WHERE token=?", (token,))
+    return cursor.fetchone() is not None
 
 app = fastapi.FastAPI()
 users = fastapi.APIRouter(prefix="/users")
@@ -99,10 +117,7 @@ def user_login(request: LoginRequest, conn: sqlite3.Connection = fastapi.Depends
 
 @ai.post("/chat/simple")
 def chat(request: ChatRequest, conn: sqlite3.Connection = fastapi.Depends(get_db)):
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM users WHERE token=?", (request.token,))
-    user = cursor.fetchone()
-    if not user:
+    if not verify_token(request.token, conn):
         return {"error": "Invalid token"}
     
     try:
@@ -124,9 +139,38 @@ def chat(request: ChatRequest, conn: sqlite3.Connection = fastapi.Depends(get_db
     except Exception as e:
         return {"error": str(e)}
 
+ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
+ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/webp'}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
+def is_allowed_image(filename: str, content_type: str) -> bool:
+    ext = Path(filename).suffix.lower()
+    return ext in ALLOWED_IMAGE_EXTENSIONS and content_type in ALLOWED_IMAGE_TYPES
+
+@ai.post("/analysis/upload")
+async def upload_file(token: str, file: fastapi.UploadFile = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
+    if not verify_token(token, conn):
+        return {"error": "Invalid token"}
+    
+    if not is_allowed_image(file.filename, file.content_type):
+        return {"error": f"只支持图片格式: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}"}
+    
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        return {"error": f"文件大小超过限制 (最大 {MAX_FILE_SIZE // (1024*1024)}MB)"}
+    
+    file_path = os.path.join(read_config()['upload_file_path']['path'], str(time.time()) + "_" + token)
+    with open(file_path, "wb") as f:
+        f.write(content)
+    
+    return {"filename": file.filename, "content_type": file.content_type, "size": len(content)}
+
 app.include_router(users)
 app.include_router(ai)
-fastapi_cdn_host.patch_docs(app)
+swagger_js_url = "/static/swagger-ui/swagger-ui-bundle.js"
+swagger_css_url = "/static/swagger-ui/swagger-ui.css"
+from fastapi.staticfiles import StaticFiles
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 if __name__ == "__main__":
     config_init()
