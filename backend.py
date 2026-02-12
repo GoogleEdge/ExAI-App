@@ -7,6 +7,8 @@ import hashlib
 import yaml
 import os
 import time
+import layoutparser as lp
+import cv2
 from pathlib import Path
 from pydantic import BaseModel
 
@@ -86,6 +88,29 @@ def verify_token(token: str, conn: sqlite3.Connection) -> bool:
     cursor.execute("SELECT id FROM users WHERE token=?", (token,))
     return cursor.fetchone() is not None
 
+def cut_pictures(file_path: str, token: str):
+    image = cv2.imread(file_path)
+    if image is None:
+        print(f"无法读取图片: {file_path}")
+        return None
+    
+    image_rgb = image[..., ::-1]
+    
+    try:
+        model = lp.Detectron2LayoutModel(
+            'lp://PubLayNet/faster_rcnn_R_50_FPN_3x/config',
+            extra_config=["MODEL.ROI_HEADS.SCORE_THRESH_TEST", 0.8],
+            label_map={0: "Text", 1: "Title", 2: "List", 3: "Table", 4: "Figure"}
+        )
+        layout = model.detect(image_rgb)
+        result_image = lp.draw_box(image_rgb, layout, box_width=3, box_alpha=0.5, show_element_type=True)
+        output_path = file_path.rsplit('.', 1)[0] + "_cut.jpg"
+        cv2.imwrite(output_path, result_image[..., ::-1])
+        return output_path
+    except Exception as e:
+        print(f"分割失败: {e}")
+        return None
+
 app = fastapi.FastAPI()
 users = fastapi.APIRouter(prefix="/users")
 ai = fastapi.APIRouter(prefix="/ai")
@@ -139,13 +164,13 @@ def chat(request: ChatRequest, conn: sqlite3.Connection = fastapi.Depends(get_db
     except Exception as e:
         return {"error": str(e)}
 
-ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
-ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/webp'}
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+allowed_image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
+allowed_image_types = {'image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/webp'}
+max_file_size = 10 * 1024 * 1024 
 
 def is_allowed_image(filename: str, content_type: str) -> bool:
     ext = Path(filename).suffix.lower()
-    return ext in ALLOWED_IMAGE_EXTENSIONS and content_type in ALLOWED_IMAGE_TYPES
+    return ext in allowed_image_extensions and content_type in allowed_image_types
 
 @ai.post("/analysis/upload")
 async def upload_file(token: str, file: fastapi.UploadFile = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
@@ -153,17 +178,26 @@ async def upload_file(token: str, file: fastapi.UploadFile = fastapi.File(...), 
         return {"error": "Invalid token"}
     
     if not is_allowed_image(file.filename, file.content_type):
-        return {"error": f"只支持图片格式: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}"}
+        return {"error": f"只支持图片格式: {', '.join(allowed_image_extensions)}"}
     
     content = await file.read()
-    if len(content) > MAX_FILE_SIZE:
-        return {"error": f"文件大小超过限制 (最大 {MAX_FILE_SIZE // (1024*1024)}MB)"}
+    if len(content) > max_file_size:
+        return {"error": f"文件大小超过限制 (最大 {max_file_size // (1024*1024)}MB)"}
     
-    file_path = os.path.join(read_config()['upload_file_path']['path'], str(time.time()) + "_" + token)
+    ext = Path(file.filename).suffix.lower()
+    file_path = os.path.join(read_config()['upload_file_path']['path'], str(time.time()) + "_" + token + ext)
     with open(file_path, "wb") as f:
         f.write(content)
     
-    return {"filename": file.filename, "content_type": file.content_type, "size": len(content)}
+    cut_result = cut_pictures(file_path, token)
+    
+    return {
+        "filename": file.filename,
+        "content_type": file.content_type,
+        "size": len(content),
+        "saved_path": file_path,
+        "segmented_path": cut_result
+    }
 
 app.include_router(users)
 app.include_router(ai)
