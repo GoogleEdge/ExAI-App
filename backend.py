@@ -1,3 +1,4 @@
+from typing import Any
 import fastapi
 import zai
 import sqlite3
@@ -9,6 +10,9 @@ import os
 import time
 import layoutparser as lp
 import cv2
+import base64
+import json
+from ultralytics import YOLO
 from pathlib import Path
 from pydantic import BaseModel
 
@@ -87,29 +91,67 @@ def verify_token(token: str, conn: sqlite3.Connection) -> bool:
     cursor = conn.cursor()
     cursor.execute("SELECT id FROM users WHERE token=?", (token,))
     return cursor.fetchone() is not None
+    
+def analysis_wrong_question(file_path: str):
+    with open(file_path, "rb") as f:
+        image_data = base64.b64encode(f.read()).decode("utf-8")
+        
+    ext = Path(file_path).suffix.lower()
+    mime_type = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".bmp": "image/bmp",
+        ".webp": "image/webp"
+    }.get(ext, "image/jpeg")
+  
+    client = zai.ZhipuAiClient(api_key=read_config()['zhipu_ai']['api_key'])
+    try:     
+        response = client.chat.completions.create(
+            model=read_config()['zhipu_ai']['model'],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": """作为一名专业的教育家，你需要科学、合理地分析为什么学生会犯这种错误，并提出相应的建议。
 
-def cut_pictures(file_path: str, token: str):
-    image = cv2.imread(file_path)
-    if image is None:
-        print(f"无法读取图片: {file_path}")
-        return None
-    
-    image_rgb = image[..., ::-1]
-    
-    try:
-        model = lp.Detectron2LayoutModel(
-            'lp://PubLayNet/faster_rcnn_R_50_FPN_3x/config',
-            extra_config=["MODEL.ROI_HEADS.SCORE_THRESH_TEST", 0.8],
-            label_map={0: "Text", 1: "Title", 2: "List", 3: "Table", 4: "Figure"}
+请以JSON格式输出，包含以下字段：
+- wrong_reason: 分析学生犯错的原因
+- suggestion: 针对性的学习建议
+
+只输出JSON，不要添加任何其他文字。"""
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                            "url": f"data:{mime_type};base64,{image_data}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            response_format={"type": "json_object"}
         )
-        layout = model.detect(image_rgb)
-        result_image = lp.draw_box(image_rgb, layout, box_width=3, box_alpha=0.5, show_element_type=True)
-        output_path = file_path.rsplit('.', 1)[0] + "_cut.jpg"
-        cv2.imwrite(output_path, result_image[..., ::-1])
-        return output_path
+        
+        result = response.choices[0].message.content
+        return json.loads(result)
+    except json.JSONDecodeError as e:
+        print(f"JSON解析失败: {e}")
+        return {"error": "AI返回格式错误", "raw_content": result if 'result' in dir() else None}
     except Exception as e:
-        print(f"分割失败: {e}")
-        return None
+        print(f"分析失败: {e}")
+        return {"error": str(e)}
+
+allowed_image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
+allowed_image_types = {'image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/webp'}
+max_file_size = 10 * 1024 * 1024 
+
+def is_allowed_image(filename: str, content_type: str) -> bool:
+    ext = Path(filename).suffix.lower()
+    return ext in allowed_image_extensions and content_type in allowed_image_types
 
 app = fastapi.FastAPI()
 users = fastapi.APIRouter(prefix="/users")
@@ -164,40 +206,105 @@ def chat(request: ChatRequest, conn: sqlite3.Connection = fastapi.Depends(get_db
     except Exception as e:
         return {"error": str(e)}
 
-allowed_image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
-allowed_image_types = {'image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/webp'}
-max_file_size = 10 * 1024 * 1024 
-
-def is_allowed_image(filename: str, content_type: str) -> bool:
-    ext = Path(filename).suffix.lower()
-    return ext in allowed_image_extensions and content_type in allowed_image_types
-
-@ai.post("/analysis/upload")
-async def upload_file(token: str, file: fastapi.UploadFile = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
+@ai.post("/analysis/detection")
+async def upload_file(token: str, files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
     if not verify_token(token, conn):
         return {"error": "Invalid token"}
     
-    if not is_allowed_image(file.filename, file.content_type):
-        return {"error": f"只支持图片格式: {', '.join(allowed_image_extensions)}"}
+    results_list = []
+    for file in files:
+        if not is_allowed_image(file.filename, file.content_type):
+            continue
+        
+        content = await file.read()
+        if len(content) > max_file_size:
+            continue
+        
+        ext = Path(file.filename).suffix.lower()
+        file_path = os.path.join(read_config()['upload_file_path']['path'], str(time.time()) + "_" + token + ext)
+        with open(file_path, "wb") as f:
+            f.write(content)
+        
+        model = YOLO(read_config()['yolo_model']['path'])
+        results = model(file_path)
+        
+        bboxes = []
+        for result in results:
+            for box in result.boxes.xyxy.cpu().numpy():
+                bboxes.append(box.tolist())
+        
+        results_list.append({
+            "filename": file.filename,
+            "bboxes": bboxes
+        })
     
-    content = await file.read()
-    if len(content) > max_file_size:
-        return {"error": f"文件大小超过限制 (最大 {max_file_size // (1024*1024)}MB)"}
+    return {"results": results_list}
+
+@ai.post("/analysis/overview")
+async def analysis_exam_paper_overview(token: str, files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
+    if not verify_token(token, conn):
+        return {"error": "Invalid token"}
     
-    ext = Path(file.filename).suffix.lower()
-    file_path = os.path.join(read_config()['upload_file_path']['path'], str(time.time()) + "_" + token + ext)
-    with open(file_path, "wb") as f:
-        f.write(content)
+    client = zai.ZhipuAiClient(api_key=read_config()['zhipu_ai']['api_key'])
+
+    content_list = []
+    for file in files:
+        if not is_allowed_image(file.filename, file.content_type):
+            continue
+        
+        ext = Path(file.filename).suffix.lower()
+        mime_type = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".gif": "image/gif",
+            ".bmp": "image/bmp",
+            ".webp": "image/webp"
+        }.get(ext, "image/jpeg")
+        
+        content = await file.read()
+        img_base = base64.b64encode(content).decode("utf-8")
+        
+        content_list.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{mime_type};base64,{img_base}"
+            }
+        })
     
-    cut_result = cut_pictures(file_path, token)
-    
-    return {
-        "filename": file.filename,
-        "content_type": file.content_type,
-        "size": len(content),
-        "saved_path": file_path,
-        "segmented_path": cut_result
-    }
+    content_list.append({
+        "type": "text",
+        "text": """请分析这些试卷图片，识别并提取以下信息：
+
+请以JSON格式输出，包含以下字段：
+- subject: 试卷科目（如：语文、数学、英语、物理、化学、生物、历史、地理、政治等）
+- difficulty: 试卷难度（简单、中等、困难）
+- grade: 适用年级（如：小学一年级、初中二年级、高中三年级等）
+- num: 上传的试卷页数（如：1、2、3等）
+
+只输出JSON，不要添加任何其他文字。"""
+    })
+
+    try:
+        response = client.chat.completions.create(
+            model=read_config()['zhipu_ai']['v_model'],
+            messages=[
+                {
+                    "role": "user",
+                    "content": content_list
+                }
+            ],
+            response_format={"type": "json_object"}
+        )
+        
+        result = response.choices[0].message.content
+        return json.loads(result)
+    except json.JSONDecodeError as e:
+        print(f"JSON解析失败: {e}")
+        return {"error": "AI返回格式错误", "raw_content": result if 'result' in dir() else None}
+    except Exception as e:
+        print(f"分析失败: {e}")
+        return {"error": str(e)}
 
 app.include_router(users)
 app.include_router(ai)
