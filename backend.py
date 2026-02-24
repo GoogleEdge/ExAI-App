@@ -1,4 +1,3 @@
-from typing import Any
 import fastapi
 import zai
 import sqlite3
@@ -8,8 +7,6 @@ import hashlib
 import yaml
 import os
 import time
-import layoutparser as lp
-import cv2
 import base64
 import json
 from ultralytics import YOLO
@@ -93,62 +90,10 @@ def read_config():
 
 def verify_token(token: str, conn: sqlite3.Connection) -> bool:
     cursor = conn.cursor()
-    cursor.execute("SELECT id FROM users WHERE token=?", (token,))
-    return cursor.fetchone() is not None
+    cursor.execute("SELECT id, username FROM users WHERE token=?", (token,))
+    result = cursor.fetchone()
+    return result is not None
     
-def analysis_wrong_question(file_path: str):
-    with open(file_path, "rb") as f:
-        image_data = base64.b64encode(f.read()).decode("utf-8")
-        
-    ext = Path(file_path).suffix.lower()
-    mime_type = {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".gif": "image/gif",
-        ".bmp": "image/bmp",
-        ".webp": "image/webp"
-    }.get(ext, "image/jpeg")
-  
-    client = zai.ZhipuAiClient(api_key=read_config()['zhipu_ai']['api_key'])
-    try:     
-        response = client.chat.completions.create(
-            model=read_config()['zhipu_ai']['model'],
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": """作为一名专业的教育家，你需要科学、合理地分析为什么学生会犯这种错误，并提出相应的建议。
-
-请以JSON格式输出，包含以下字段：
-- wrong_reason: 分析学生犯错的原因
-- suggestion: 针对性的学习建议
-
-只输出JSON，不要添加任何其他文字。"""
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                            "url": f"data:{mime_type};base64,{image_data}"
-                            }
-                        }
-                    ]
-                }
-            ],
-            response_format={"type": "json_object"}
-        )
-        
-        result = response.choices[0].message.content
-        return json.loads(result)
-    except json.JSONDecodeError as e:
-        print(f"JSON解析失败: {e}")
-        return {"error": "AI返回格式错误", "raw_content": result if 'result' in dir() else None}
-    except Exception as e:
-        print(f"分析失败: {e}")
-        return {"error": str(e)}
-
 allowed_image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
 allowed_image_types = {'image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/webp'}
 max_file_size = 10 * 1024 * 1024 
@@ -189,7 +134,7 @@ def user_login(request: LoginRequest, conn: sqlite3.Connection = fastapi.Depends
 @ai.post("/chat/simple")
 def chat(request: ChatRequest, conn: sqlite3.Connection = fastapi.Depends(get_db)):
     if not verify_token(request.token, conn):
-        return {"error": "Invalid token"}
+        raise fastapi.HTTPException(status_code=401, detail="Invalid token")
     
     try:
         client = zai.ZhipuAiClient(api_key=read_config()['zhipu_ai']['api_key']) 
@@ -211,9 +156,9 @@ def chat(request: ChatRequest, conn: sqlite3.Connection = fastapi.Depends(get_db
         return {"error": str(e)}
 
 @ai.post("/analysis/detection")
-async def upload_file(token: str = fastapi.Form(...), files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
-    if not verify_token(token, conn):
-        return {"error": "Invalid token"}
+async def upload_file(token: str = fastapi.Header(...), files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
+    if not token or not verify_token(token, conn):
+        raise fastapi.HTTPException(status_code=401, detail="Invalid token")
     
     results_list = []
     for file in files:
@@ -245,9 +190,9 @@ async def upload_file(token: str = fastapi.Form(...), files: list[fastapi.Upload
     return {"results": results_list}
 
 @ai.post("/analysis/overview")
-async def analysis_exam_paper_overview(token: str = fastapi.Form(...), files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
+async def analysis_exam_paper_overview(token: str = fastapi.Header(...), files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
     if not verify_token(token, conn):
-        return {"error": "Invalid token"}
+        raise fastapi.HTTPException(status_code=401, detail="Invalid token")
     
     client = zai.ZhipuAiClient(api_key=read_config()['zhipu_ai']['api_key'])
 
@@ -309,6 +254,70 @@ async def analysis_exam_paper_overview(token: str = fastapi.Form(...), files: li
     except Exception as e:
         print(f"分析失败: {e}")
         return {"error": str(e)}
+
+@ai.post("/analysis/wrong_questions")
+async def analysis_wrong_question(token: str = fastapi.Header(...), files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
+    if not verify_token(token, conn):
+        raise fastapi.HTTPException(status_code=401, detail="Invalid token")
+    
+    client = zai.ZhipuAiClient(api_key=read_config()['zhipu_ai']['api_key'])
+    
+    content_list = []
+    for file in files:
+        content = await file.read()
+        image_data = base64.b64encode(content).decode("utf-8")
+        
+        ext = Path(file.filename).suffix.lower()
+        mime_type = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".gif": "image/gif",
+            ".bmp": "image/bmp",
+            ".webp": "image/webp"
+        }.get(ext, "image/jpeg")
+        
+        content_list.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{mime_type};base64,{image_data}"
+            }
+        })
+    
+    content_list.append({
+        "type": "text",
+        "text": """作为一名专业的教育家，你需要科学、合理地分析为什么学生会犯这种错误，并提出相应的建议。
+
+请以JSON格式输出，包含以下字段：
+- wrong_reason: 分析学生犯错的原因，简洁，一般情况下不超过30字
+- suggestion: 针对性的学习建议，简洁，一般情况下不超过30字
+- likely_question: 一条与之考点一致的题目。
+- likely_question_answer: 生成的相似题目的解答
+
+只输出JSON，不要添加任何其他文字。例如犯错原因：对有理数与绝对值的理解不透彻，没有考虑到0的绝对值不是正数。学习建议：重新复习相关内容。"""
+    })
+
+    try:
+        response = client.chat.completions.create(
+            model=read_config()['zhipu_ai']['v_model'],
+            messages=[
+                {
+                    "role": "user",
+                    "content": content_list
+                }
+            ],
+            response_format={"type": "json_object"}
+        )
+        
+        result = response.choices[0].message.content
+        return json.loads(result)
+    except json.JSONDecodeError as e:
+        print(f"JSON解析失败: {e}")
+        return {"error": "AI返回格式错误", "raw_content": result if 'result' in dir() else None}
+    except Exception as e:
+        print(f"分析失败: {e}")
+        return {"error": str(e)}
+
 
 app.include_router(users)
 app.include_router(ai)
