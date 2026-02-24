@@ -64,10 +64,14 @@ def config_init():
         },
         'zhipu_ai': {
             'model': 'glm-4.7-flash',
+            'v_model': 'glm-4.6v-flash',
             'api_key': 'sk-1234567890abcdef1234567890abcdef'
         },
         'upload_file_path': {
             'path': 'uploaded_files'
+        },
+        'yolo_model_path': {
+            'path': 'yolo_model.pt'
         }
     }
     
@@ -207,7 +211,7 @@ def chat(request: ChatRequest, conn: sqlite3.Connection = fastapi.Depends(get_db
         return {"error": str(e)}
 
 @ai.post("/analysis/detection")
-async def upload_file(token: str, files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
+async def upload_file(token: str = fastapi.Form(...), files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
     if not verify_token(token, conn):
         return {"error": "Invalid token"}
     
@@ -241,7 +245,7 @@ async def upload_file(token: str, files: list[fastapi.UploadFile] = fastapi.File
     return {"results": results_list}
 
 @ai.post("/analysis/overview")
-async def analysis_exam_paper_overview(token: str, files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
+async def analysis_exam_paper_overview(token: str = fastapi.Form(...), files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
     if not verify_token(token, conn):
         return {"error": "Invalid token"}
     

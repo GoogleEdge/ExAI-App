@@ -3,3 +3,4 @@ uploaded_files
 static
 users.db
 config.yaml
+client.py
