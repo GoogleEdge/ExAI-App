@@ -25,6 +25,14 @@ class ChatRequest(BaseModel):
     message: str
     token: str
 
+class ExamMarksRequest(BaseModel):
+    username: str
+    exam_names: str
+    subject: str
+    difficulty: str
+    grade: str
+    marks: int
+
 def get_db():
     conn = sqlite3.connect('users.db', check_same_thread=False)
     try:
@@ -51,8 +59,36 @@ def sqlite_init():
         )
     ''')
     conn.commit()
-    conn.close()
     print("用户表创建成功！")
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS exam_marks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            exam_names TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            difficulty TEXT NOT NULL,
+            grade TEXT NOT NULL,
+            marks INTEGER NOT NULL
+        )
+    ''')
+    conn.commit()
+    print("考试成绩表创建成功！")
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS wrong_questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            wrong_reason TEXT NOT NULL,
+            grade TEXT NOT NULL,
+            source TEXT NOT NULL,
+            difficulty TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            content TEXT NOT NULL
+        )
+    ''')
+    conn.commit()
+    conn.close()
+    print("错题表创建成功！")
 
 def config_init():
     config = {
@@ -105,6 +141,7 @@ def is_allowed_image(filename: str, content_type: str) -> bool:
 app = fastapi.FastAPI()
 users = fastapi.APIRouter(prefix="/users")
 ai = fastapi.APIRouter(prefix="/ai")
+tools = fastapi.APIRouter(prefix="/tools")
 
 @users.post("/register")
 def register_user(request: RegisterRequest, conn: sqlite3.Connection = fastapi.Depends(get_db)):
@@ -132,9 +169,9 @@ def user_login(request: LoginRequest, conn: sqlite3.Connection = fastapi.Depends
         return {"error": "Invalid username or password"}
 
 @ai.post("/chat/simple")
-def chat(request: ChatRequest, conn: sqlite3.Connection = fastapi.Depends(get_db)):
-    if not verify_token(request.token, conn):
-        raise fastapi.HTTPException(status_code=401, detail="Invalid token")
+def chat(token: str = fastapi.Header(...), request: ChatRequest = fastapi.Body(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
+    if not verify_token(token, conn):
+        raise fastapi.HTTPException(status_code=401, detail="token验证失败")
     
     try:
         client = zai.ZhipuAiClient(api_key=read_config()['zhipu_ai']['api_key']) 
@@ -318,7 +355,58 @@ async def analysis_wrong_question(token: str = fastapi.Header(...), files: list[
         print(f"分析失败: {e}")
         return {"error": str(e)}
 
+@tools.post("/upload/examMarks")
+async def upload_exam_marks(token: str = fastapi.Header(...), request: ExamMarksRequest = fastapi.Body(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
+    if not verify_token(token, conn):
+        raise fastapi.HTTPException(status_code=401, detail="token验证失败")
+    
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO exam_marks (username, exam_names, subject, difficulty, grade, marks) VALUES (?, ?, ?, ?, ?, ?)",
+                   (request.username, request.exam_names, request.subject, request.difficulty, request.grade, request.marks))
+    conn.commit()
+    return {"message": "考试成绩上传成功"}
 
+@tools.get("/search/examMarks")
+async def search_exam_marks(token: str = fastapi.Header(...), username: str = fastapi.Query(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
+    if not verify_token(token, conn):
+        raise fastapi.HTTPException(status_code=401, detail="token验证失败")
+    
+    cursor = conn.cursor()
+    cursor.execute("SELECT exam_names, subject, difficulty, grade, marks FROM exam_marks WHERE username = ?", (username,))
+    rows = cursor.fetchall()
+    return {"exam_marks": rows}
+
+@tools.post("/upload/wrong_questions")
+async def upload_wrong_questions(token: str = fastapi.Header(...), username: str = fastapi.Form(...), wrong_reason: str = fastapi.Form(...), grade: str = fastapi.Form(...), source: str = fastapi.Form(...), difficulty: str = fastapi.Form(...), subject: str = fastapi.Form(...), files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
+    if not verify_token(token, conn):
+        raise fastapi.HTTPException(status_code=401, detail="token验证失败")
+    
+    cursor = conn.cursor()
+    for file in files:
+        content = await file.read()
+        content_base64 = base64.b64encode(content).decode("utf-8")
+        cursor.execute(
+            "INSERT INTO wrong_questions (username, wrong_reason, grade, source, difficulty, subject, file_name, content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (username, wrong_reason, grade, source, difficulty, subject, file.filename, content_base64)
+        )
+    conn.commit()
+    return {"message": "错题上传成功"}
+
+@tools.get("/search/wrong_questions")
+async def search_wrong_questions(
+    token: str = fastapi.Header(...),
+    username: str = fastapi.Query(...),
+    conn: sqlite3.Connection = fastapi.Depends(get_db)
+):
+    if not verify_token(token, conn):
+        raise fastapi.HTTPException(status_code=401, detail="token验证失败")
+    
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, wrong_reason, grade, source, difficulty, subject, content FROM wrong_questions WHERE username = ?", (username,))
+    rows = cursor.fetchall()
+    return {"wrong_questions": rows}
+
+app.include_router(tools)
 app.include_router(users)
 app.include_router(ai)
 swagger_js_url = "/static/swagger-ui/swagger-ui-bundle.js"
