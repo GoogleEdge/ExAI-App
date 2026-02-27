@@ -9,9 +9,27 @@ import os
 import time
 import base64
 import json
+import uuid
+import numpy as np
+from contextlib import asynccontextmanager
 from ultralytics import YOLO
 from pathlib import Path
 from pydantic import BaseModel
+from enum import Enum
+from typing import TypedDict
+from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
+
+class TaskStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    SUCCESS = "success"
+    FAILED = "failed"
+
+class _TaskInfo(TypedDict):
+    status: TaskStatus
+    result: dict[str, any] | None 
+    error: str | None
 
 class RegisterRequest(BaseModel):
     username: str
@@ -23,7 +41,6 @@ class LoginRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
-    token: str
 
 class ExamMarksRequest(BaseModel):
     username: str
@@ -32,6 +49,11 @@ class ExamMarksRequest(BaseModel):
     difficulty: str
     grade: str
     marks: int
+
+type TaskDict = dict[str, _TaskInfo]
+tasks: TaskDict = {}
+ml_models = {}
+embedding_model = None
 
 def get_db():
     conn = sqlite3.connect('users.db', check_same_thread=False)
@@ -44,7 +66,7 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 def generate_token() -> str:
-    return ''.join(str(random.randint(0, 9)) for _ in range(32))
+    return str(uuid.uuid4())
 
 def sqlite_init():
     conn = sqlite3.connect('users.db')
@@ -59,7 +81,7 @@ def sqlite_init():
         )
     ''')
     conn.commit()
-    print("用户表创建成功！")
+    print("用户表检查成功！")
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS exam_marks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,7 +94,7 @@ def sqlite_init():
         )
     ''')
     conn.commit()
-    print("考试成绩表创建成功！")
+    print("考试成绩表检查成功！")
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS wrong_questions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,12 +105,26 @@ def sqlite_init():
             difficulty TEXT NOT NULL,
             subject TEXT NOT NULL,
             file_name TEXT NOT NULL,
-            content TEXT NOT NULL
+            content TEXT NOT NULL,
+            embedding_json TEXT
         )
     ''')
     conn.commit()
+    print("错题表检查成功！")
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subject TEXT NOT NULL,
+            grade TEXT NOT NULL,
+            question_text TEXT NOT NULL,
+            similar_question TEXT,
+            similar_answer TEXT,
+            embedding_json TEXT
+        )
+    ''')
+    conn.commit()
+    print("题库表检查成功！")
     conn.close()
-    print("错题表创建成功！")
 
 def config_init():
     config = {
@@ -98,12 +134,11 @@ def config_init():
         'zhipu_ai': {
             'model': 'glm-4.7-flash',
             'v_model': 'glm-4.6v-flash',
-            'api_key': 'sk-1234567890abcdef1234567890abcdef'
         },
         'upload_file_path': {
             'path': 'uploaded_files'
         },
-        'yolo_model_path': {
+        'yolo_model': {
             'path': 'yolo_model.pt'
         }
     }
@@ -138,7 +173,169 @@ def is_allowed_image(filename: str, content_type: str) -> bool:
     ext = Path(filename).suffix.lower()
     return ext in allowed_image_extensions and content_type in allowed_image_types
 
-app = fastapi.FastAPI()
+def get_embedding(text: str) -> list[float]:
+    if not text or not embedding_model:
+        return []
+    emb = embedding_model.encode(text, normalize_embeddings=True)
+    return emb.tolist()
+
+def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
+    if not vec_a or not vec_b:
+        return 0.0
+    a = np.array(vec_a)
+    b = np.array(vec_b)
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+def find_similar_in_db(query_emb: list[float], subject: str, conn: sqlite3.Connection, threshold=0.85) -> dict | None:
+    cursor = conn.cursor()
+    cursor.execute("SELECT question_text, similar_question, similar_answer, embedding_json FROM questions WHERE subject=?", (subject,))
+    rows = cursor.fetchall()
+    
+    best_score = 0.0
+    best_match = None
+    
+    for row in rows:
+        q_text, sim_q, sim_a, emb_json = row
+        if not emb_json:
+            continue
+        try:
+            db_emb = json.loads(emb_json)
+            score = cosine_similarity(query_emb, db_emb)
+            if score > best_score:
+                best_score = score
+                best_match = {
+                    "question_text": q_text,
+                    "similar_question": sim_q,
+                    "similar_answer": sim_a,
+                    "score": score
+                }
+        except:
+            continue
+            
+    if best_score >= threshold:
+        print(f"命中题库！相似度: {best_score:.4f}")
+        return best_match
+    return None
+
+
+async def analyze_wrong_question_task(task_id: str, files_content: list, config: dict):
+    conn = sqlite3.connect('users.db')
+    try:
+        tasks[task_id]['status'] = TaskStatus.PROCESSING
+        client = zai.ZhipuAiClient(api_key=os.getenv('ZHIPU_API_KEY'))
+        content_list = []
+        for content in files_content:
+            image_data = base64.b64encode(content).decode("utf-8")
+            content_list.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}
+            })
+        
+        extraction_prompt = """请分析这张错题图片。
+请以JSON格式输出：
+1. original_question: 图片中题目的原文内容（尽量准确提取，用于检索）
+2. subject: 图片中的题目的科目（如数学，英语）
+3. grade: 图片中的题目的等级（如高中，初中）
+3. wrong_reason: 学生犯错的原因（简洁）
+4. suggestion: 针对性学习建议（简洁）
+只输出JSON。"""
+
+        content_list.append({"type": "text", "text": extraction_prompt})
+
+        response = client.chat.completions.create(
+            model=config['zhipu_ai']['v_model'],
+            messages=[{"role": "user", "content": content_list}],
+            response_format={"type": "json_object"}
+        )
+        
+        analysis_result = json.loads(response.choices[0].message.content)
+        original_question = analysis_result.get("original_question", "")
+        wrong_reason = analysis_result.get("wrong_reason", "")
+        suggestion = analysis_result.get("suggestion", "")
+        subject = analysis_result.get("subject", "")
+        grade = analysis_result.get("grade", "")
+
+        task_result = {}
+        
+        if original_question and embedding_model:
+            query_emb = get_embedding(original_question)
+            match = find_similar_in_db(query_emb, subject, conn) 
+            
+            if match:
+                task_result = {
+                    "wrong_reason": wrong_reason,
+                    "suggestion": suggestion,
+                    "likely_question": match['similar_question'],
+                    "likely_question_answer": match['similar_answer'],
+                    "source": "DB"
+                }
+        
+        if not task_result:
+            print("题库未命中，调用AI生成新题...")
+            gen_prompt = f"""基于以下题目，生成一道考察相同知识点但数值或情境不同的新题目。
+原题目：{original_question}
+
+请以JSON格式输出：
+1. likely_question: 生成的新题目
+2. likely_question_answer: 新题目的解答
+只输出JSON。"""
+
+            gen_content_list = content_list[:-1] 
+            gen_content_list.append({"type": "text", "text": gen_prompt})
+            
+            gen_response = client.chat.completions.create(
+                model=config['zhipu_ai']['v_model'],
+                messages=[{"role": "user", "content": gen_content_list}],
+                response_format={"type": "json_object"}
+            )
+            
+            gen_result = json.loads(gen_response.choices[0].message.content)
+            
+            new_question = gen_result.get("likely_question")
+            new_answer = gen_result.get("likely_question_answer")
+            
+            if new_question and query_emb:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO questions (subject, grade, question_text, similar_question, similar_answer, embedding_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (subject, grade, original_question, new_question, new_answer, json.dumps(query_emb)))
+                conn.commit()
+                print("新题目已存入题库！")
+
+            task_result = {
+                "wrong_reason": wrong_reason,
+                "suggestion": suggestion,
+                "likely_question": new_question,
+                "likely_question_answer": new_answer,
+                "source": "AI" 
+            }
+
+        tasks[task_id]['status'] = TaskStatus.SUCCESS
+        tasks[task_id]['result'] = task_result
+        
+    except Exception as e:
+        tasks[task_id]['status'] = TaskStatus.FAILED
+        tasks[task_id]['error'] = str(e)
+        print(f"任务执行失败: {e}")
+    finally:
+        conn.close()
+
+@asynccontextmanager
+async def lifespan(app: fastapi.FastAPI):
+    global embedding_model
+    config_init()
+    sqlite_init()
+    load_dotenv()
+    config = read_config()
+    ml_models["yolo"] = YOLO(config['yolo_model']['path'])
+    print("YOLO模型加载完成")
+    embedding_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+    print("SentenceTransformer 向量模型加载完成")
+    yield
+    ml_models.clear()
+
+app = fastapi.FastAPI(lifespan=lifespan)
 users = fastapi.APIRouter(prefix="/users")
 ai = fastapi.APIRouter(prefix="/ai")
 tools = fastapi.APIRouter(prefix="/tools")
@@ -174,7 +371,7 @@ def chat(token: str = fastapi.Header(...), request: ChatRequest = fastapi.Body(.
         raise fastapi.HTTPException(status_code=401, detail="token验证失败")
     
     try:
-        client = zai.ZhipuAiClient(api_key=read_config()['zhipu_ai']['api_key']) 
+        client = zai.ZhipuAiClient(api_key=os.getenv("ZHIPU_API_KEY")) 
         response = client.chat.completions.create(
             model=read_config()['zhipu_ai']['model'],
             messages=[
@@ -192,7 +389,7 @@ def chat(token: str = fastapi.Header(...), request: ChatRequest = fastapi.Body(.
     except Exception as e:
         return {"error": str(e)}
 
-@ai.post("/analysis/detection")
+@ai.post("/analysis/exam_detection")
 async def upload_file(token: str = fastapi.Header(...), files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
     if not token or not verify_token(token, conn):
         raise fastapi.HTTPException(status_code=401, detail="Invalid token")
@@ -211,7 +408,7 @@ async def upload_file(token: str = fastapi.Header(...), files: list[fastapi.Uplo
         with open(file_path, "wb") as f:
             f.write(content)
         
-        model = YOLO(read_config()['yolo_model']['path'])
+        model = ml_models["yolo"]
         results = model(file_path)
         
         bboxes = []
@@ -226,12 +423,12 @@ async def upload_file(token: str = fastapi.Header(...), files: list[fastapi.Uplo
     
     return {"results": results_list}
 
-@ai.post("/analysis/overview")
+@ai.post("/analysis/exam_overview")
 async def analysis_exam_paper_overview(token: str = fastapi.Header(...), files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
     if not verify_token(token, conn):
         raise fastapi.HTTPException(status_code=401, detail="Invalid token")
     
-    client = zai.ZhipuAiClient(api_key=read_config()['zhipu_ai']['api_key'])
+    client = zai.ZhipuAiClient(api_key=os.getenv("ZHIPU_API_KEY"))
 
     content_list = []
     for file in files:
@@ -292,70 +489,47 @@ async def analysis_exam_paper_overview(token: str = fastapi.Header(...), files: 
         print(f"分析失败: {e}")
         return {"error": str(e)}
 
-@ai.post("/analysis/wrong_questions")
-async def analysis_wrong_question(token: str = fastapi.Header(...), files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
+@ai.post("/analysis/exam_wrongs/submit")
+async def submit_wrong_question(token: str = fastapi.Header(...), background_tasks: fastapi.BackgroundTasks = fastapi.BackgroundTasks(), files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
     if not verify_token(token, conn):
-        raise fastapi.HTTPException(status_code=401, detail="Invalid token")
+        raise fastapi.HTTPException(status_code=401, detail="token验证失败")
     
-    client = zai.ZhipuAiClient(api_key=read_config()['zhipu_ai']['api_key'])
-    
-    content_list = []
+    task_id = str(uuid.uuid4())
+    files_content = []
     for file in files:
         content = await file.read()
-        image_data = base64.b64encode(content).decode("utf-8")
-        
-        ext = Path(file.filename).suffix.lower()
-        mime_type = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".gif": "image/gif",
-            ".bmp": "image/bmp",
-            ".webp": "image/webp"
-        }.get(ext, "image/jpeg")
-        
-        content_list.append({
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:{mime_type};base64,{image_data}"
-            }
-        })
+        files_content.append(content)
+    config = read_config()
+    tasks[task_id] = {
+        'status': TaskStatus.PENDING,
+        'result': None,
+        'error': None
+    }
+    background_tasks.add_task(analyze_wrong_question_task, task_id, files_content, config)
     
-    content_list.append({
-        "type": "text",
-        "text": """作为一名专业的教育家，你需要科学、合理地分析为什么学生会犯这种错误，并提出相应的建议。
+    return {
+        "message": "任务已提交，正在后台处理",
+        "task_id": task_id,
+        "status": TaskStatus.PENDING.value
+    }
 
-请以JSON格式输出，包含以下字段：
-- wrong_reason: 分析学生犯错的原因，简洁，一般情况下不超过30字
-- suggestion: 针对性的学习建议，简洁，一般情况下不超过30字
-- likely_question: 一条与之考点一致的题目。
-- likely_question_answer: 生成的相似题目的解答
+@ai.get("/analysis/exam_wrongs/result/{task_id}")
+async def get_analysis_result(token: str = fastapi.Header(...), task_id: str = fastapi.Path(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
+    if not verify_token(token, conn):
+        raise fastapi.HTTPException(status_code=401, detail="token验证失败")
 
-只输出JSON，不要添加任何其他文字。例如犯错原因：对有理数与绝对值的理解不透彻，没有考虑到0的绝对值不是正数。学习建议：重新复习相关内容。"""
-    })
+    if task_id not in tasks:
+        raise fastapi.HTTPException(status_code=404, detail="任务不存在或已过期")
+    task = tasks[task_id]
+    response = {
+        "task_id": task_id,
+        "status": task['status'].value,
+        "result": task.get('result'),
+        "error": task.get('error')
+    } 
+    return response
 
-    try:
-        response = client.chat.completions.create(
-            model=read_config()['zhipu_ai']['v_model'],
-            messages=[
-                {
-                    "role": "user",
-                    "content": content_list
-                }
-            ],
-            response_format={"type": "json_object"}
-        )
-        
-        result = response.choices[0].message.content
-        return json.loads(result)
-    except json.JSONDecodeError as e:
-        print(f"JSON解析失败: {e}")
-        return {"error": "AI返回格式错误", "raw_content": result if 'result' in dir() else None}
-    except Exception as e:
-        print(f"分析失败: {e}")
-        return {"error": str(e)}
-
-@tools.post("/upload/examMarks")
+@tools.post("/upload/exam_marks")
 async def upload_exam_marks(token: str = fastapi.Header(...), request: ExamMarksRequest = fastapi.Body(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
     if not verify_token(token, conn):
         raise fastapi.HTTPException(status_code=401, detail="token验证失败")
@@ -366,7 +540,7 @@ async def upload_exam_marks(token: str = fastapi.Header(...), request: ExamMarks
     conn.commit()
     return {"message": "考试成绩上传成功"}
 
-@tools.get("/search/examMarks")
+@tools.get("/search/exam_marks")
 async def search_exam_marks(token: str = fastapi.Header(...), username: str = fastapi.Query(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
     if not verify_token(token, conn):
         raise fastapi.HTTPException(status_code=401, detail="token验证失败")
@@ -415,7 +589,5 @@ from fastapi.staticfiles import StaticFiles
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 if __name__ == "__main__":
-    config_init()
-    sqlite_init()
     uvicorn.run(app='backend:app', host='127.0.0.1', port=8100, reload=True)
 

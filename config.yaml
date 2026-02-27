@@ -1,0 +1,9 @@
+upload_file_path:
+  path: uploaded_files
+users_db:
+  path: users.db
+yolo_model:
+  path: yolo_model.pt
+zhipu_ai:
+  model: glm-4.7-flash
+  v_model: glm-4.6v-flash

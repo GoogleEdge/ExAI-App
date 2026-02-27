@@ -2,6 +2,6 @@ __pycache__
 uploaded_files
 static
 users.db
-config.yaml
 client.py
 frontend_tasks.md
+.env
