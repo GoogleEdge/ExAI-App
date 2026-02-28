@@ -2,7 +2,6 @@ import fastapi
 import zai
 import sqlite3
 import uvicorn
-import random
 import hashlib
 import yaml
 import os

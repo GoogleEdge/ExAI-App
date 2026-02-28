@@ -1,0 +1,7 @@
+path: c:/Users/10732/Documents/代码/2026srsc/yolo部分/exam_dataset
+train: images/train
+val: images/val
+test: images/test
+
+names:
+  0: question

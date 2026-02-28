@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pydantic
+pyyaml
+python-dotenv
+ultralytics
+numpy
+zai
+sentence-transformers
