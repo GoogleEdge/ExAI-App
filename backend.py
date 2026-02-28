@@ -1,23 +1,27 @@
-import fastapi
-import zai
-import sqlite3
-import uvicorn
-import hashlib
-import yaml
-import os
-import time
 import base64
-import json
-import uuid
-import numpy as np
 from contextlib import asynccontextmanager
-from ultralytics import YOLO
-from pathlib import Path
-from pydantic import BaseModel
+from datetime import datetime, timedelta
 from enum import Enum
+import hashlib
+import json
+import os
+from pathlib import Path
+import sqlite3
+import time
 from typing import TypedDict
+import uuid
+
 from dotenv import load_dotenv
+import fastapi
+from fastapi.staticfiles import StaticFiles
+import numpy as np
+from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
+from ultralytics import YOLO
+import uvicorn
+import yaml
+import zai
+    
 
 class TaskStatus(str, Enum):
     PENDING = "pending"
@@ -105,7 +109,11 @@ def sqlite_init():
             subject TEXT NOT NULL,
             file_name TEXT NOT NULL,
             content TEXT NOT NULL,
-            embedding_json TEXT
+            embedding_json TEXT,
+            next_review_date TEXT,
+            review_count INTEGER DEFAULT 0,
+            ease_factor REAL DEFAULT 2.5,
+            interval_days INTEGER DEFAULT 1
         )
     ''')
     conn.commit()
@@ -163,6 +171,25 @@ def verify_token(token: str, conn: sqlite3.Connection) -> bool:
     cursor.execute("SELECT id, username FROM users WHERE token=?", (token,))
     result = cursor.fetchone()
     return result is not None
+
+def calculate_ebbinghaus(review_count: int, ease_factor: float, interval_days: int, quality: int):
+    if quality < 3:
+        new_review_count = 0
+        interval_days = 1
+    else:
+        new_review_count = review_count + 1
+        if review_count == 0:
+            interval_days = 1
+        elif review_count == 1:
+            interval_days = 6
+        else:
+            interval_days = int(interval_days * ease_factor)
+        
+        ease_factor = max(1.3, ease_factor + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)))
+    
+    next_date = (datetime.now() + timedelta(days=interval_days)).strftime('%Y-%m-%d')
+    
+    return next_date, new_review_count, ease_factor, interval_days
     
 allowed_image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
 allowed_image_types = {'image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/webp'}
@@ -185,36 +212,36 @@ def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     b = np.array(vec_b)
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
-def find_similar_in_db(query_emb: list[float], subject: str, conn: sqlite3.Connection, threshold=0.85) -> dict | None:
-    cursor = conn.cursor()
-    cursor.execute("SELECT question_text, similar_question, similar_answer, embedding_json FROM questions WHERE subject=?", (subject,))
-    rows = cursor.fetchall()
+def find_similar_in_db(query_emb: list[float], subject: str, conn: sqlite3.Connection, threshold=0.85) -> dict | None:  # 定义函数：查询数据库中相似的题目
+    cursor = conn.cursor()  # 获取数据库游标
+    cursor.execute("SELECT question_text, similar_question, similar_answer, embedding_json FROM questions WHERE subject=?", (subject,))  # SQL查询：根据科目查找题目
+    rows = cursor.fetchall()  # 获取所有匹配的行
     
-    best_score = 0.0
-    best_match = None
+    best_score = 0.0  # 初始化最高相似度分数
+    best_match = None  # 初始化最佳匹配结果
     
-    for row in rows:
-        q_text, sim_q, sim_a, emb_json = row
-        if not emb_json:
+    for row in rows:  # 遍历每一道题目
+        q_text, sim_q, sim_a, emb_json = row  # 解包行数据
+        if not emb_json:  # 如果没有嵌入向量，跳过
             continue
-        try:
-            db_emb = json.loads(emb_json)
-            score = cosine_similarity(query_emb, db_emb)
-            if score > best_score:
-                best_score = score
-                best_match = {
+        try:  # 尝试执行
+            db_emb = json.loads(emb_json)  # 解析JSON字符串
+            score = cosine_similarity(query_emb, db_emb)  # 计算余弦相似度
+            if score > best_score:  # 如果分数更高
+                best_score = score  # 更新最高分数
+                best_match = {  # 记录最佳匹配
                     "question_text": q_text,
                     "similar_question": sim_q,
                     "similar_answer": sim_a,
                     "score": score
                 }
-        except:
-            continue
+        except:  # 如果发生异常
+            continue  # 跳过这道题
             
-    if best_score >= threshold:
-        print(f"命中题库！相似度: {best_score:.4f}")
-        return best_match
-    return None
+    if best_score >= threshold:  # 如果最高分数 >= 阈值
+        print(f"命中题库！相似度: {best_score:.4f}")  # 打印日志
+        return best_match  # 返回匹配结果
+    return None  # 没有找到匹配的题目
 
 
 async def analyze_wrong_question_task(task_id: str, files_content: list, config: dict):
@@ -283,7 +310,7 @@ async def analyze_wrong_question_task(task_id: str, files_content: list, config:
             gen_content_list.append({"type": "text", "text": gen_prompt})
             
             gen_response = client.chat.completions.create(
-                model=config['zhipu_ai']['v_model'],
+                model=config['zhipu_ai']['model'],
                 messages=[{"role": "user", "content": gen_content_list}],
                 response_format={"type": "json_object"}
             )
@@ -330,7 +357,7 @@ async def lifespan(app: fastapi.FastAPI):
     ml_models["yolo"] = YOLO(config['yolo_model']['path'])
     print("YOLO模型加载完成")
     embedding_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
-    print("SentenceTransformer 向量模型加载完成")
+    print("向量模型加载完成")
     yield
     ml_models.clear()
 
@@ -391,7 +418,7 @@ def chat(token: str = fastapi.Header(...), request: ChatRequest = fastapi.Body(.
 @ai.post("/analysis/exam_detection")
 async def upload_file(token: str = fastapi.Header(...), files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
     if not token or not verify_token(token, conn):
-        raise fastapi.HTTPException(status_code=401, detail="Invalid token")
+        raise fastapi.HTTPException(status_code=401, detail="token验证失败")
     
     results_list = []
     for file in files:
@@ -425,7 +452,7 @@ async def upload_file(token: str = fastapi.Header(...), files: list[fastapi.Uplo
 @ai.post("/analysis/exam_overview")
 async def analysis_exam_paper_overview(token: str = fastapi.Header(...), files: list[fastapi.UploadFile] = fastapi.File(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
     if not verify_token(token, conn):
-        raise fastapi.HTTPException(status_code=401, detail="Invalid token")
+        raise fastapi.HTTPException(status_code=401, detail="token验证失败")
     
     client = zai.ZhipuAiClient(api_key=os.getenv("ZHIPU_API_KEY"))
 
@@ -566,11 +593,7 @@ async def upload_wrong_questions(token: str = fastapi.Header(...), username: str
     return {"message": "错题上传成功"}
 
 @tools.get("/search/wrong_questions")
-async def search_wrong_questions(
-    token: str = fastapi.Header(...),
-    username: str = fastapi.Query(...),
-    conn: sqlite3.Connection = fastapi.Depends(get_db)
-):
+async def search_wrong_questions(token: str = fastapi.Header(...), username: str = fastapi.Query(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
     if not verify_token(token, conn):
         raise fastapi.HTTPException(status_code=401, detail="token验证失败")
     
@@ -579,12 +602,88 @@ async def search_wrong_questions(
     rows = cursor.fetchall()
     return {"wrong_questions": rows}
 
+@tools.get("/review/wrong_questions/today")
+async def get_today_review_questions(token: str = fastapi.Header(...), username: str = fastapi.Query(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
+    if not verify_token(token, conn):
+        raise fastapi.HTTPException(status_code=401, detail="token验证失败")
+    
+    from datetime import datetime
+    today = datetime.now().strftime('%Y-%m-%d')
+    
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, wrong_reason, grade, source, difficulty, subject, file_name, content, 
+               review_count, ease_factor, interval_days, next_review_date
+        FROM wrong_questions 
+        WHERE username = ? AND (next_review_date IS NULL OR next_review_date <= ?)
+    """, (username, today))
+    rows = cursor.fetchall()
+    
+    review_list = []
+    for row in rows:
+        review_list.append({
+            "id": row[0],
+            "wrong_reason": row[1],
+            "grade": row[2],
+            "source": row[3],
+            "difficulty": row[4],
+            "subject": row[5],
+            "file_name": row[6],
+            "content": row[7],
+            "review_count": row[8],
+            "ease_factor": row[9],
+            "interval_days": row[10],
+            "next_review_date": row[11]
+        })
+    
+    return {"today_review": review_list, "count": len(review_list)}
+
+@tools.post("/review/wrong_questions/{question_id}")
+async def review_wrong_question(question_id: int, token: str = fastapi.Header(...), quality: int = fastapi.Form(...), conn: sqlite3.Connection = fastapi.Depends(get_db)):
+    if not verify_token(token, conn):
+        raise fastapi.HTTPException(status_code=401, detail="token验证失败")
+    
+    if quality < 0 or quality > 5:
+        raise fastapi.HTTPException(status_code=400, detail="quality must be between 0 and 5")
+    
+    today = datetime.now().strftime('%Y-%m-%d')
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT review_count, ease_factor, interval_days, next_review_date 
+        FROM wrong_questions WHERE id = ?
+    """, (question_id,))
+    row = cursor.fetchone()
+    
+    if not row:
+        raise fastapi.HTTPException(status_code=404, detail="错题不存在")
+    
+    if row[3] and row[3] > today:
+        raise fastapi.HTTPException(status_code=400, detail="今日已复习，请明天再来")
+    
+    review_count, ease_factor, interval_days, _, _ = row
+    
+    next_date, new_review_count, new_ease_factor, new_interval_days = calculate_ebbinghaus(review_count, ease_factor, interval_days, quality)
+    
+    cursor.execute("""
+        UPDATE wrong_questions 
+        SET review_count = ?, ease_factor = ?, interval_days = ?, next_review_date = ?
+        WHERE id = ?
+    """, (new_review_count, new_ease_factor, new_interval_days, next_date, question_id))
+    conn.commit()
+    
+    return {
+        "message": "复习完成",
+        "next_review_date": next_date,
+        "interval_days": new_interval_days,
+        "review_count": new_review_count
+    }
+
 app.include_router(tools)
 app.include_router(users)
 app.include_router(ai)
 swagger_js_url = "/static/swagger-ui/swagger-ui-bundle.js"
 swagger_css_url = "/static/swagger-ui/swagger-ui.css"
-from fastapi.staticfiles import StaticFiles
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 if __name__ == "__main__":

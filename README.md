@@ -21,6 +21,10 @@
 - `POST /tools/upload/wrong_questions` - 上传错题
 - `GET /tools/search/wrong_questions` - 查询错题
 
+### 复习模块 (/review) - 艾宾浩斯遗忘曲线
+- `GET /tools/review/wrong_questions/today` - 获取今日复习任务
+- `POST /tools/review/wrong_questions/{question_id}` - 提交复习结果（评分0-5）
+
 ## 技术栈
 
 - **后端框架**: FastAPI
@@ -118,7 +122,7 @@ ExAI-App/
 ├── config.yaml          # 配置文件
 ├── requirements.txt     # Python 依赖
 ├── .env                 # 环境变量 (需创建)
-├── yolo_model.pt        # YOLO 模型文件
+├── yolo_model.pt        # YOLO 模型文件 (试卷题目检测)
 ├── uploaded_files/      # 上传文件存储目录 (自动创建)
 └── users.db             # SQLite 数据库 (自动创建)
 ```
@@ -150,9 +154,12 @@ curl -X POST http://127.0.0.1:8100/ai/chat/simple \
 ### 上传错题 (FormData)
 ```javascript
 const formData = new FormData();
+formData.append('username', 'testuser');
 formData.append('subject', '数学');
-formData.append('difficulty', '中等');
 formData.append('grade', '高三');
+formData.append('wrong_reason', '计算错误');
+formData.append('source', '月考试卷');
+formData.append('difficulty', '中等');
 formData.append('files', fileInput.files[0]);
 
 fetch('/tools/upload/wrong_questions', {
@@ -161,6 +168,25 @@ fetch('/tools/upload/wrong_questions', {
   body: formData
 });
 ```
+
+### 获取今日复习任务
+```bash
+curl -X GET "http://127.0.0.1:8100/tools/review/wrong_questions/today?username=testuser" \
+  -H "token: your_token"
+```
+
+### 提交复习结果 (评分0-5)
+```bash
+curl -X POST "http://127.0.0.1:8100/tools/review/wrong_questions/1" \
+  -H "token: your_token" \
+  -d "username=testuser&quality=4"
+```
+
+**quality 说明**：
+- 0-2: 忘记，需要重新学习（1天后复习）
+- 3: 勉强记住
+- 4: 记得较牢
+- 5: 完全记住（按艾宾浩斯曲线延长间隔）
 
 ## 生产环境部署
 
@@ -200,13 +226,122 @@ docker build -t exai-app .
 docker run -d -p 8100:8100 --name exai-app exai-app
 ```
 
+## YOLO 模型训练指南
+
+如果你需要重新训练 YOLO 模型用于试卷题目检测，按以下步骤操作：
+
+### 1. 安装依赖
+
+```bash
+pip install ultralytics labelme
+```
+
+### 2. 准备数据集
+
+使用 [labelme](https://github.com/wkentaro/labelme) 标注工具标注试卷图片，生成 JSON 标注文件。
+
+标注完成后，将标注的 JSON 文件转换为 YOLO 格式：
+
+```python
+# convert_labelme.py
+import json
+import os
+from pathlib import Path
+
+def convert_labelme_to_yolo(json_file, output_dir, image_width, image_height):
+    with open(json_file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    
+    txt_file = os.path.join(output_dir, Path(json_file).stem + '.txt')
+    with open(txt_file, 'w', encoding='utf-8') as f:
+        for shape in data.get('shapes', []):
+            label = shape['label']
+            points = shape['points']
+            
+            # 转换为 YOLO 格式 (中心点坐标 + 宽高，归一化)
+            x_coords = [p[0] for p in points]
+            y_coords = [p[1] for p in points]
+            
+            x_min, x_max = min(x_coords), max(x_coords)
+            y_min, y_max = min(y_coords), max(y_coords)
+            
+            x_center = ((x_min + x_max) / 2) / image_width
+            y_center = ((y_min + y_max) / 2) / image_height
+            width = (x_max - x_min) / image_width
+            height = (y_max - y_min) / image_height
+            
+            f.write(f"{label} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}\n")
+```
+
+### 3. 创建数据集目录结构
+
+```
+dataset/
+├── images/
+│   ├── train/
+│   └── val/
+└── labels/
+    ├── train/
+    └── val/
+```
+
+### 4. 创建数据集配置文件
+
+创建 `dataset.yaml`:
+
+```yaml
+path: ./dataset
+train: images/train
+val: images/val
+
+nc: 1  # 类别数量
+names: ['question']  # 类别名称
+```
+
+### 5. 训练模型
+
+```bash
+from ultralytics import YOLO
+
+# 使用预训练模型
+model = YOLO('yolov8n.pt')
+
+# 训练
+model.train(
+    data='dataset.yaml',
+    epochs=100,
+    imgsz=640,
+    batch=16,
+    name='exam_detection',
+    exist_ok=True
+)
+```
+
+### 6. 导出模型
+
+训练完成后，导出为 PyTorch 格式：
+
+```bash
+# 导出为 .pt 文件
+model.export(format='pt')
+```
+
+生成的模型文件在 `runs/detect/exam_detection/weights/best.pt`，将其重命名为 `yolo_model.pt` 并放置在项目根目录。
+
+### 7. 类别说明
+
+当前模型检测的类别：
+- `question` - 试卷题目区域
+
+如需添加新类别，修改数据集配置中的 `nc` 和 `names`。
+
 ## 注意事项
 
 1. 首次启动会自动创建数据库和配置
-2. `yolo_model.pt` 需要自行下载 YOLO 模型文件
+2. `yolo_model.pt` 已放置在项目根目录（用于试卷题目检测）
 3. 智谱 AI API Key 需要在官网申请: https://open.bigmodel.cn/
 4. 生产环境建议使用反向代理 (Nginx) + HTTPS
 
 ## 许可证
 
-MIT License
+Apache License 2.0
