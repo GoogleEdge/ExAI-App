@@ -62,6 +62,20 @@ Token: your_token_here
 }
 ```
 
+**Python 代码示例**:
+```python
+import requests
+
+url = "http://127.0.0.1:8100/users/register"
+data = {
+    "username": "test_user",
+    "password": "password123"
+}
+response = requests.post(url, json=data)
+print(response.json())
+# 输出: {"message": "register success", "token": "..."}
+```
+
 ---
 
 ### 2. 用户登录
@@ -89,6 +103,20 @@ Token: your_token_here
 {
   "error": "Invalid username or password"
 }
+```
+
+**Python 代码示例**:
+```python
+import requests
+
+url = "http://127.0.0.1:8100/users/login"
+data = {
+    "username": "test_user",
+    "password": "password123"
+}
+response = requests.post(url, json=data)
+print(response.json())
+# 输出: {"message": "login success", "token": "..."}
 ```
 
 ---
@@ -125,6 +153,18 @@ Token: your_token_here
 }
 ```
 
+**Python 代码示例**:
+```python
+import requests
+
+url = "http://127.0.0.1:8100/ai/chat/simple"
+headers = {"Token": "your_token_here"}
+data = {"message": "请解释一下勾股定理"}
+response = requests.post(url, headers=headers, json=data)
+print(response.json())
+# 输出: {"message": "AI 的回复内容"}
+```
+
 ---
 
 ### 4. 试卷题目检测
@@ -151,6 +191,21 @@ Token: your_token_here
     }
   ]
 }
+```
+
+**Python 代码示例**:
+```python
+import requests
+
+url = "http://127.0.0.1:8100/ai/analysis/exam_detection"
+headers = {"Token": "your_token_here"}
+files = [
+    ("files", ("exam1.jpg", open("exam1.jpg", "rb"), "image/jpeg")),
+    ("files", ("exam2.jpg", open("exam2.jpg", "rb"), "image/jpeg"))
+]
+response = requests.post(url, headers=headers, files=files)
+print(response.json())
+# 输出: {"results": [{"filename": "exam1.jpg", "bboxes": [...]}, ...]}
 ```
 
 ---
@@ -187,6 +242,20 @@ Token: your_token_here
 }
 ```
 
+**Python 代码示例**:
+```python
+import requests
+
+url = "http://127.0.0.1:8100/ai/analysis/exam_overview"
+headers = {"Token": "your_token_here"}
+files = [
+    ("files", ("math_exam.jpg", open("math_exam.jpg", "rb"), "image/jpeg"))
+]
+response = requests.post(url, headers=headers, files=files)
+print(response.json())
+# 输出: {"subject": "数学", "difficulty": "中等", "grade": "高中一年级", "num": 1}
+```
+
 ---
 
 ### 6. 错题分析提交
@@ -212,6 +281,21 @@ Token: your_token_here
   "task_id": "uuid-string",
   "status": "pending"
 }
+```
+
+**Python 代码示例**:
+```python
+import requests
+
+url = "http://127.0.0.1:8100/ai/analysis/exam_wrongs/submit"
+headers = {"Token": "your_token_here"}
+files = [
+    ("files", ("wrong_question.jpg", open("wrong_question.jpg", "rb"), "image/jpeg"))
+]
+response = requests.post(url, headers=headers, files=files)
+print(response.json())
+# 输出: {"message": "任务已提交，正在后台处理", "task_id": "...", "status": "pending"}
+task_id = response.json()["task_id"]
 ```
 
 ---
@@ -250,6 +334,18 @@ Token: your_token_here
 - `success`: 成功
 - `failed`: 失败
 
+**Python 代码示例**:
+```python
+import requests
+
+task_id = "之前获取的task_id"
+url = f"http://127.0.0.1:8100/ai/analysis/exam_wrongs/result/{task_id}"
+headers = {"Token": "your_token_here"}
+response = requests.get(url, headers=headers)
+print(response.json())
+# 输出: {"task_id": "...", "status": "success", "result": {...}, "error": null}
+```
+
 ---
 
 ## 工具模块 (prefix: /tools)
@@ -282,6 +378,25 @@ Token: your_token_here
 }
 ```
 
+**Python 代码示例**:
+```python
+import requests
+
+url = "http://127.0.0.1:8100/tools/upload/exam_marks"
+headers = {"Token": "your_token_here"}
+data = {
+    "username": "test_user",
+    "exam_names": "期末考试",
+    "subject": "数学",
+    "difficulty": "中等",
+    "grade": "高一",
+    "marks": 95
+}
+response = requests.post(url, headers=headers, json=data)
+print(response.json())
+# 输出: {"message": "考试成绩上传成功"}
+```
+
 ---
 
 ### 9. 查询考试成绩
@@ -306,6 +421,18 @@ Token: your_token_here
     ["月考", "物理", "困难", "高二", 88]
   ]
 }
+```
+
+**Python 代码示例**:
+```python
+import requests
+
+url = "http://127.0.0.1:8100/tools/search/exam_marks"
+headers = {"Token": "your_token_here"}
+params = {"username": "test_user"}
+response = requests.get(url, headers=headers, params=params)
+print(response.json())
+# 输出: {"exam_marks": [["期末考试", "数学", "中等", "高一", 95], ...]}
 ```
 
 ---
@@ -335,6 +462,28 @@ Token: your_token_here
 {
   "message": "错题上传成功"
 }
+```
+
+**Python 代码示例**:
+```python
+import requests
+
+url = "http://127.0.0.1:8100/tools/upload/wrong_questions"
+headers = {"Token": "your_token_here"}
+data = {
+    "username": "test_user",
+    "wrong_reason": "计算错误",
+    "grade": "高一",
+    "source": "期末考试",
+    "difficulty": "中等",
+    "subject": "数学"
+}
+files = [
+    ("files", ("wrong1.jpg", open("wrong1.jpg", "rb"), "image/jpeg"))
+]
+response = requests.post(url, headers=headers, data=data, files=files)
+print(response.json())
+# 输出: {"message": "错题上传成功"}
 ```
 
 ---
@@ -368,6 +517,18 @@ Token: your_token_here
     }
   ]
 }
+```
+
+**Python 代码示例**:
+```python
+import requests
+
+url = "http://127.0.0.1:8100/tools/search/wrong_questions"
+headers = {"Token": "your_token_here"}
+params = {"username": "test_user"}
+response = requests.get(url, headers=headers, params=params)
+print(response.json())
+# 输出: {"wrong_questions": [{...}, ...]}
 ```
 
 ---
@@ -409,6 +570,18 @@ Token: your_token_here
   ],
   "count": 1
 }
+```
+
+**Python 代码示例**:
+```python
+import requests
+
+url = "http://127.0.0.1:8100/tools/review/wrong_questions/today"
+headers = {"Token": "your_token_here"}
+params = {"username": "test_user"}
+response = requests.get(url, headers=headers, params=params)
+print(response.json())
+# 输出: {"today_review": [{...}], "count": 1}
 ```
 
 ---
@@ -459,6 +632,19 @@ Token: your_token_here
 {
   "detail": "今日已复习，请明天再来"
 }
+```
+
+**Python 代码示例**:
+```python
+import requests
+
+question_id = 1  # 错题ID
+url = f"http://127.0.0.1:8100/tools/review/wrong_questions/{question_id}"
+headers = {"Token": "your_token_here"}
+data = {"quality": 4}  # 复习质量评分 0-5
+response = requests.post(url, headers=headers, data=data)
+print(response.json())
+# 输出: {"message": "复习完成", "next_review_date": "2024-01-20", "interval_days": 7, "review_count": 4}
 ```
 
 ---
