@@ -161,7 +161,6 @@ def main(page: ft.Page):
             page.update()
         
     def on_task_check(e, task_id):
-        """更新待办事项完成状态（同步数据库）"""
         try:
             task_id = int(task_id)
             db.update_task_status(task_id, e.control.value)
@@ -169,7 +168,6 @@ def main(page: ft.Page):
             print(f"更新任务状态错误: {e}")
     
     def add_clicked(e):
-        """添加待办事项（同步数据库，处理特殊字符）"""
         content = new_task.value.strip()
         if not content:
             return
@@ -206,7 +204,6 @@ def main(page: ft.Page):
             page.update()
             
     def load_tasks_from_db():
-        """从数据库加载待办事项到UI（添加错误处理）"""
         try:
             tasks = db.get_all_tasks()
             for task in tasks:
@@ -346,7 +343,6 @@ def main(page: ft.Page):
         start_pause_btn.icon = ft.Icons.PLAY_ARROW
         update_timer()
 
-    # 删除：显示操作按钮相关代码
     focus_btn = ft.CupertinoFilledButton("学习",icon=ft.Icons.LIBRARY_BOOKS,on_click=switch_mode, bgcolor=ft.Colors.GREY_700, color=ft.Colors.WHITE, width=90)
     rest_btn = ft.CupertinoFilledButton("休息",icon=ft.Icons.SPA,on_click=switch_mode, bgcolor=ft.Colors.GREY_400, color=ft.Colors.WHITE, width=90)
     mode_switch_row = ft.Row([focus_btn, rest_btn], spacing=-1, alignment=ft.MainAxisAlignment.CENTER)  # 删除visible=False
@@ -357,13 +353,7 @@ def main(page: ft.Page):
 
     pomodoro_content = ft.Column(
         spacing=20, horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True,
-        controls=[
-            ft.Text("番茄学习计时器", size=25, color=ft.Colors.WHITE),
-            mode_switch_row,
-            timer_display,
-            buttons_row  # 直接显示按钮，不再通过复选框控制
-        ]
-    )
+        controls=[ft.Text("番茄学习计时器", size=25, color=ft.Colors.WHITE),mode_switch_row,timer_display,buttons_row])
 
     def stat_card(title: str, value: ft.Text, color: ft.Colors) -> ft.Container:
         return ft.Container(
@@ -442,7 +432,6 @@ def main(page: ft.Page):
         page.update()
     
     def send_ai_question(e):
-        """包装成同步函数供按钮调用"""
         page.run_task(send_ai_question_async, e)
     
     ai_question_input = ft.TextField(
@@ -475,7 +464,6 @@ def main(page: ft.Page):
         ]
     )
 
-    # ========== 图片上传 ==========
     def upload_image(e):
         root = tk.Tk()
         root.withdraw() 
