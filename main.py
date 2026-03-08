@@ -319,10 +319,6 @@ def main(page: ft.Page):
 
     def start_pause(e):
         nonlocal timer_running, timer_thread
-        if total_seconds <= 0 or not page.session:
-            timer_display.value = "请先设置时间"
-            page.update()
-            return
         if not timer_running:
             timer_running = True
             if timer_thread is None or not timer_thread.is_alive():
@@ -345,10 +341,10 @@ def main(page: ft.Page):
 
     focus_btn = ft.CupertinoFilledButton("学习",icon=ft.Icons.LIBRARY_BOOKS,on_click=switch_mode, bgcolor=ft.Colors.GREY_700, color=ft.Colors.WHITE, width=90)
     rest_btn = ft.CupertinoFilledButton("休息",icon=ft.Icons.SPA,on_click=switch_mode, bgcolor=ft.Colors.GREY_400, color=ft.Colors.WHITE, width=90)
-    mode_switch_row = ft.Row([focus_btn, rest_btn], spacing=-1, alignment=ft.MainAxisAlignment.CENTER)  # 删除visible=False
+    mode_switch_row = ft.Row([focus_btn, rest_btn], spacing=-1, alignment=ft.MainAxisAlignment.CENTER)
     start_pause_btn = ft.CupertinoFilledButton(icon=ft.Icons.PLAY_ARROW,icon_color=ft.Colors.WHITE,bgcolor=ft.Colors.BLACK,on_click=start_pause,width=60,height=50)
     reset_btn = ft.CupertinoFilledButton(icon=ft.Icons.REFRESH,icon_color=ft.Colors.WHITE,bgcolor=ft.Colors.BLACK,on_click=reset_timer,width=60,height=50)
-    buttons_row = ft.Row([start_pause_btn, reset_btn], spacing=20, alignment=ft.MainAxisAlignment.CENTER)  # 删除visible=False
+    buttons_row = ft.Row([start_pause_btn, reset_btn], spacing=20, alignment=ft.MainAxisAlignment.CENTER)
     timer_display = ft.Text(f"{25:02d}:{00:02d}", size=40, color=ft.Colors.CYAN, text_align=ft.TextAlign.CENTER)
 
     pomodoro_content = ft.Column(
@@ -405,18 +401,17 @@ def main(page: ft.Page):
             padding=10,
             border_radius=10,
             alignment=ft.alignment.Alignment(x=1, y=0),
-            width=page.width * 0.6
+            width=page.width * 0.9
         )
         ai_chat_messages.controls.append(user_message)
         ai_question_input.value = ""
-        loading_reply = ft.Container(
-            content=ft.Text("我已收到你的问题，正在思考中...", color=ft.Colors.BLACK, size=14),bgcolor=ft.Colors.GREY_300,padding=10,border_radius=10,alignment=ft.alignment.Alignment(x=-1, y=0),width=page.width * 0.6)
+        loading_reply = ft.Container(content=ft.Text("我已收到你的问题，正在思考中...", color=ft.Colors.BLACK, size=14),bgcolor=ft.Colors.GREY_300,padding=10,border_radius=10,alignment=ft.alignment.Alignment(x=-1, y=0),width=page.width * 0.9)
 
         loading_index = len(ai_chat_messages.controls)
         ai_chat_messages.controls.append(loading_reply)
         page.update()
         ai_response = await call_ai_api(user_input)
-        ai_chat_messages.controls[loading_index] = ft.Container(content=ft.Text(ai_response, color=ft.Colors.BLACK, size=14),bgcolor=ft.Colors.GREY_300,padding=10,border_radius=10,alignment=ft.alignment.Alignment(x=-1, y=0),width=page.width * 0.6)
+        ai_chat_messages.controls[loading_index] = ft.Container(content=ft.Text(ai_response, color=ft.Colors.BLACK, size=14),bgcolor=ft.Colors.GREY_300,padding=10,border_radius=10,alignment=ft.alignment.Alignment(x=-1, y=0),width=page.width * 0.9)
         ai_chat_messages.scroll_to(offset=0, alignment=1.0)
         page.update()
     
@@ -471,9 +466,8 @@ def main(page: ft.Page):
         else:
             ai_image_status.value = "❌ 未选择任何图片"
             ai_analysis_result.value = ""
-        
         page.update()
-    
+
     upload_image_btn = ft.CupertinoFilledButton("上传图片分析问题",icon=ft.Icons.UPLOAD_FILE,bgcolor=ft.Colors.GREEN,color=ft.Colors.WHITE,on_click=upload_image  )
     
     ai_image_status = ft.Text("", size=16, color=ft.Colors.WHITE, text_align=ft.TextAlign.CENTER)
@@ -503,4 +497,4 @@ def main(page: ft.Page):
     page.add(ft.Column([content_container, bottom_nav], expand=True, spacing=0))
 
 if __name__ == "__main__":
-    ft.app(target=main)
+    ft.run(main)
