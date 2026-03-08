@@ -360,20 +360,11 @@ def main(page: ft.Page):
             width=180,height=150,border=ft.Border.all(2, color),border_radius=10,padding=20,
             content=ft.Column(alignment=ft.MainAxisAlignment.CENTER,horizontal_alignment=ft.CrossAxisAlignment.CENTER,spacing=15,controls=[ft.Text(title, size=20, color=ft.Colors.WHITE),value])
         )
-    ai_chat_messages = ft.Column(
-        expand=True,
-        scroll=ft.ScrollMode.AUTO,
-        spacing=10
-    )
-    
-    ai_chat_container = ft.Container(
-        content=ai_chat_messages,
-        padding=10,
-        expand=True
-    )
-    
+        
+    ai_chat_messages = ft.Column(expand=True,scroll=ft.ScrollMode.AUTO,spacing=10)
+    ai_chat_container = ft.Container(content=ai_chat_messages,padding=10,expand=True)
+
     async def call_ai_api(message):
-        """调用AI聊天接口并返回结果"""
         try:
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
@@ -397,7 +388,6 @@ def main(page: ft.Page):
                     return json.dumps(result, ensure_ascii=False)
             else:
                 return f"接口返回错误：状态码 {response.status_code}"
-                
         except requests.exceptions.ConnectionError:
             return "❌ 无法连接到AI服务"
         except requests.exceptions.Timeout:
@@ -406,7 +396,6 @@ def main(page: ft.Page):
             return f"❌ 发生错误：{str(e)}"
     
     async def send_ai_question_async(e):
-        """异步处理AI问题发送"""
         user_input = ai_question_input.value.strip()
         if not user_input:
             return
@@ -460,7 +449,6 @@ def main(page: ft.Page):
                 controls=[stat_card("待办事项", todo_count, ft.Colors.CYAN),stat_card("番茄循环", pomodoro_cycle, ft.Colors.ORANGE)]
             ),
             ai_assistant_card,
-            ft.Image(src="https://img.icons8.com/fluency/200/000000/study.png", width=150, height=150),
         ]
     )
 
