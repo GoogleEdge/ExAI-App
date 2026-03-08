@@ -1,0 +1,288 @@
+import flet as ft
+import requests
+import json
+
+REGISTER_URL = "http://127.0.0.1:8100/users/register"
+LOGIN_URL = "http://127.0.0.1:8100/users/login"
+REQUEST_TIMEOUT = 10
+
+def register_user(username, password, email=None):
+    """
+    发送用户注册请求（封装的通用函数）
+    :param username: 用户名（必填）
+    :param password: 密码（必填）
+    :param email: 邮箱（选填）- 保留参数兼容，但界面已移除
+    :return: 注册结果（字典格式：success, message, data）
+    """
+    register_url = REGISTER_URL
+    data = {
+        "username": username,
+        "password": password
+    }
+
+    try:
+        response = requests.post(
+            url=register_url,
+            json=data,
+            timeout=REQUEST_TIMEOUT,
+            headers={
+                "Content-Type": "application/json"
+            }
+        )
+
+        print(f"注册响应状态码: {response.status_code}")
+        print(f"注册响应内容: {response.text}")
+
+        if response.status_code == 200:
+            try:
+                result = response.json()
+                return {"success": True, "message": "注册成功", "data": result}
+            except:
+                return {"success": True, "message": "注册成功"}
+        else:
+            try:
+                error_info = response.json()
+                return {"success": False, "message": f"注册失败: {error_info.get('message', '未知错误')}"}
+            except:
+                return {"success": False, "message": f"注册失败，状态码: {response.status_code}"}
+
+    except requests.exceptions.ConnectionError:
+        return {"success": False, "message": "连接失败：无法访问服务器，请检查地址或服务器状态"}
+    except requests.exceptions.Timeout:
+        return {"success": False, "message": "请求超时：服务器响应过慢，请稍后重试"}
+    except requests.exceptions.RequestException as e:
+        return {"success": False, "message": f"请求异常：{str(e)}"}
+    except Exception as e:
+        return {"success": False, "message": f"未知错误：{str(e)}"}
+
+def login_user(username, password):
+    """
+    发送用户登录请求（和注册函数保持一致的封装风格）
+    :param username: 用户名（必填）
+    :param password: 密码（必填）
+    :return: 登录结果（字典格式：success, message, data）
+    """
+    login_url = LOGIN_URL
+    data = {
+        "username": username,
+        "password": password
+    }
+
+    try:
+        response = requests.post(
+            url=login_url,
+            json=data,
+            timeout=REQUEST_TIMEOUT,
+            headers={
+                "Content-Type": "application/json"
+            }
+        )
+
+        print(f"登录响应状态码: {response.status_code}")
+        print(f"登录响应内容: {response.text}")
+
+        if response.status_code == 200:
+            try:
+                result = response.json()
+                token = result.get("token", "")
+                return {
+                    "success": True,
+                    "message": f"登录成功！Token: {token}" if token else "登录成功！",
+                    "data": result
+                }
+            except:
+                return {"success": True, "message": "登录成功！", "data": None}
+        else:
+            try:
+                error_info = response.json()
+                return {"success": False, "message": f"登录失败: {error_info.get('message', '未知错误')}"}
+            except:
+                return {"success": False, "message": f"登录失败，状态码: {response.status_code}"}
+
+    except requests.exceptions.ConnectionError:
+        return {"success": False, "message": "连接失败：无法访问服务器，请检查地址或服务器状态"}
+    except requests.exceptions.Timeout:
+        return {"success": False, "message": "请求超时：服务器响应过慢，请稍后重试"}
+    except requests.exceptions.RequestException as e:
+        return {"success": False, "message": f"请求异常：{str(e)}"}
+    except Exception as e:
+        return {"success": False, "message": f"未知错误：{str(e)}"}
+
+def main(page: ft.Page):
+    page.title = "FastAPI 登录注册系统"
+    page.window.height = 800
+    page.window.width = 450
+    page.window.center()
+    page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
+    page.vertical_alignment = ft.MainAxisAlignment.CENTER
+    page.bgcolor = ft.Colors.GREY_900
+    page.expand = True
+    
+    status_text = ft.Text(
+        value="",
+        color=ft.Colors.RED_300,
+        text_align=ft.TextAlign.CENTER,
+        size=14
+    )
+
+    login_username = ft.TextField(
+        label="用户名",
+        width=320,
+        autofocus=True
+    )
+    login_password = ft.TextField(
+        label="密码",
+        width=320,
+        password=True
+    )
+
+    def on_login_click(e):
+        status_text.value = ""
+        status_text.color = ft.Colors.RED_300
+        page.update()
+
+        username = login_username.value.strip()
+        password = login_password.value.strip()
+
+        if not username or not password:
+            status_text.value = "用户名和密码不能为空！"
+            page.update()
+            return
+
+        login_result = login_user(username, password)
+
+        if login_result["success"]:
+            status_text.value = login_result["message"]
+            status_text.color = ft.Colors.GREEN_300
+
+            login_username.value = ""
+            login_password.value = ""
+        else:
+            status_text.value = login_result["message"]
+            status_text.color = ft.Colors.RED_300
+        
+        page.update()
+
+    register_username = ft.TextField(
+        label="用户名",
+        width=320
+    )
+    register_password = ft.TextField(
+        label="密码",
+        width=320,
+        password=True
+    )
+
+    def on_register_click(e):
+        status_text.value = ""
+        status_text.color = ft.Colors.RED_300
+        page.update()
+
+        username = register_username.value.strip()
+        password = register_password.value.strip()
+        email = None
+
+        if not username or not password:
+            status_text.value = "用户名和密码不能为空！"
+            page.update()
+            return
+
+        register_result = register_user(username, password, email)
+        
+        if register_result["success"]:
+            status_text.value = register_result["message"] + " 请前往登录"
+            status_text.color = ft.Colors.GREEN_300
+            register_username.value = ""
+            register_password.value = ""
+            switch_to_login(None)
+        else:
+            status_text.value = register_result["message"]
+            status_text.color = ft.Colors.RED_300
+        
+        page.update()
+
+    def switch_to_register(e):
+        login_view.visible = False
+        register_view.visible = True
+        status_text.value = ""
+        status_text.color = ft.Colors.RED_300
+        page.update()
+
+    def switch_to_login(e):
+        register_view.visible = False
+        login_view.visible = True
+        status_text.value = ""
+        status_text.color = ft.Colors.RED_300
+        page.update()
+
+    login_view = ft.Column(
+        [
+            ft.Text("登录", size=28, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_300),
+            ft.Container(height=20),
+            login_username,
+            ft.Container(height=12),
+            login_password,
+            ft.Container(height=20),
+            ft.ElevatedButton(
+                "登录",
+                on_click=on_login_click,
+                width=320,
+                height=45
+            ),
+            ft.Container(height=12),
+            ft.Row(
+                [
+                    ft.Text("还没有账号？",color=ft.Colors.BLUE_300),
+                    ft.TextButton("立即注册", on_click=switch_to_register)
+                ],
+                alignment=ft.MainAxisAlignment.CENTER
+            ),
+            ft.Container(height=16),
+            status_text
+        ],
+        visible=True,
+        alignment=ft.MainAxisAlignment.CENTER,
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER
+    )
+
+    register_view = ft.Column(
+        [
+            ft.Text("注册", size=28, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_300),
+            ft.Container(height=20),
+            register_username,
+            ft.Container(height=12),
+            register_password,
+            ft.Container(height=20),
+            ft.ElevatedButton(
+                "注册",
+                on_click=on_register_click,
+                width=320,
+                height=45
+            ),
+            ft.Container(height=12),
+            ft.Row(
+                [
+                    ft.Text("已有账号？",color=ft.Colors.BLUE_300),
+                    ft.TextButton("去登录", on_click=switch_to_login)
+                ],
+                alignment=ft.MainAxisAlignment.CENTER
+            ),
+            ft.Container(height=16),
+            status_text
+        ],
+        visible=False,
+        alignment=ft.MainAxisAlignment.CENTER,
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER
+    )
+
+    main_column = ft.Column(
+        [login_view, register_view],
+        expand=True,
+        alignment=ft.MainAxisAlignment.CENTER,
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER
+    )
+
+    page.add(main_column)
+
+if __name__ == "__main__":
+    ft.app(target=main,)
