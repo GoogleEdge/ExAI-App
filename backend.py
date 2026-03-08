@@ -213,35 +213,35 @@ def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 def find_similar_in_db(query_emb: list[float], subject: str, conn: sqlite3.Connection, threshold=0.85) -> dict | None:  # 定义函数：查询数据库中相似的题目
-    cursor = conn.cursor()  # 获取数据库游标
+    cursor = conn.cursor()  
     cursor.execute("SELECT question_text, similar_question, similar_answer, embedding_json FROM questions WHERE subject=?", (subject,))  # SQL查询：根据科目查找题目
-    rows = cursor.fetchall()  # 获取所有匹配的行
+    rows = cursor.fetchall()  
     
-    best_score = 0.0  # 初始化最高相似度分数
-    best_match = None  # 初始化最佳匹配结果
+    best_score = 0.0 
+    best_match = None  
     
-    for row in rows:  # 遍历每一道题目
-        q_text, sim_q, sim_a, emb_json = row  # 解包行数据
-        if not emb_json:  # 如果没有嵌入向量，跳过
+    for row in rows:  
+        q_text, sim_q, sim_a, emb_json = row 
+        if not emb_json:  
             continue
-        try:  # 尝试执行
-            db_emb = json.loads(emb_json)  # 解析JSON字符串
-            score = cosine_similarity(query_emb, db_emb)  # 计算余弦相似度
-            if score > best_score:  # 如果分数更高
-                best_score = score  # 更新最高分数
-                best_match = {  # 记录最佳匹配
+        try:  
+            db_emb = json.loads(emb_json)  
+            score = cosine_similarity(query_emb, db_emb) 
+            if score > best_score:
+                best_score = score
+                best_match = {  
                     "question_text": q_text,
                     "similar_question": sim_q,
                     "similar_answer": sim_a,
                     "score": score
                 }
-        except:  # 如果发生异常
-            continue  # 跳过这道题
+        except:
+            continue  
             
-    if best_score >= threshold:  # 如果最高分数 >= 阈值
-        print(f"命中题库！相似度: {best_score:.4f}")  # 打印日志
-        return best_match  # 返回匹配结果
-    return None  # 没有找到匹配的题目
+    if best_score >= threshold:  
+        print(f"命中题库！相似度: {best_score:.4f}") 
+        return best_match
+    return None 
 
 
 async def analyze_wrong_question_task(task_id: str, files_content: list, config: dict):
